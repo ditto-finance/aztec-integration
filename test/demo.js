@@ -5,7 +5,10 @@ const dotenv = require("dotenv");
 dotenv.config();
 const secp256k1 = require("@aztec/secp256k1");
 
-const ZkAssetMintable = artifacts.require("./ZkAssetMintable.sol");
+const ACE = artifacts.require('./ACE.sol');
+const ZkAsset = artifacts.require("./ZkAsset.sol");
+const MockDitto = artifacts.require("./MockDitto.sol");
+const ZkDittoFactory = artifacts.require("./ZkDittoFactory.sol");
 
 const {
   proofs: { MINT_PROOF }
@@ -20,69 +23,47 @@ contract("Private payment", accounts => {
   const sally = secp256k1.accountFromPrivateKey(
     process.env.GANACHE_TESTING_ACCOUNT_1
   );
-  let privatePaymentContract;
 
-  beforeEach(async () => {
-    privatePaymentContract = await ZkAssetMintable.deployed();
+  let privatePayContract;
+  let zkDittoFactory;
+  let mockDitto;
+  let ace;
+
+  before(async () => {
+    zkDittoFactory = await ZkDittoFactory.deployed();
+    mockDitto = await MockDitto.deployed();
+    ace = await ACE.deployed();
+    privatePayContract = await ZkAsset.at(await zkDittoFactory.zkDittos.call(mockDitto.address));
   });
 
-  it("Bob should be able to deposit 100 then pay sally 25 by splitting notes he owns", async () => {
-    console.log("Bob wants to deposit 100");
+  it("Bob wants to transfer 100 public tokens to private", async() => {
     const bobNote1 = await aztec.note.create(bob.publicKey, 100);
 
-    const newMintCounterNote = await aztec.note.create(bob.publicKey, 100);
-    const zeroMintCounterNote = await aztec.note.createZeroValueNote();
-    const sender = accounts[0];
-    const mintedNotes = [bobNote1];
-
-    const mintProof = new MintProof(
-      zeroMintCounterNote,
-      newMintCounterNote,
-      mintedNotes,
-      sender
-    );
-
-    const mintData = mintProof.encodeABI();
-
-    await privatePaymentContract.confidentialMint(MINT_PROOF, mintData, {
-      from: accounts[0]
-    });
-
-    console.log("completed mint proof");
-    console.log("Bob successfully deposited 100");
-
-    // bob needs to pay sally for a taxi
-    // the taxi is 25
-    // if bob pays with his note worth 100 he requires 75 change
-    console.log("Bob takes a taxi, Sally is the driver");
-    const sallyTaxiFee = await aztec.note.create(sally.publicKey, 25);
-
-    console.log("The fare comes to 25");
-    const bobNote2 = await aztec.note.create(bob.publicKey, 75);
-    const sendProofSender = accounts[0];
-    const withdrawPublicValue = 0;
-    const publicOwner = accounts[0];
+    await mockDitto.approve(ace.address, 100, { from: bob.address });
 
     const sendProof = new JoinSplitProof(
-      mintedNotes,
-      [sallyTaxiFee, bobNote2],
-      sendProofSender,
-      withdrawPublicValue,
-      publicOwner
+      [],
+      [bobNote1],
+      bob.address,
+      -100,
+      bob.address
     );
-    const sendProofData = sendProof.encodeABI(privatePaymentContract.address);
+
+    const sendProofData = sendProof.encodeABI(privatePayContract.address);
     const sendProofSignatures = sendProof.constructSignatures(
-      privatePaymentContract.address,
-      [bob]
+      privatePayContract.address,
+      []
     );
-    await privatePaymentContract.methods["confidentialTransfer(bytes,bytes)"](
+
+    await ace.publicApprove(privatePayContract.address, sendProof.hash, 200, { from: bob.address });
+
+    await privatePayContract.methods["confidentialTransfer(bytes,bytes)"](
       sendProofData,
       sendProofSignatures,
       {
-        from: accounts[0]
+        from: bob.address
       }
     );
+  })
 
-    console.log("Bob paid sally 25 for the taxi and gets 75 back");
-  });
 });
